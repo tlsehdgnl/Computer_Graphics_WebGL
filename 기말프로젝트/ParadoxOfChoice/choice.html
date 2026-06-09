@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>2026 컴퓨터 그래픽스</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 22px;
+            z-index: 100;
+            font-family: Arial, sans-serif;
+        }
+
+        #message {
+            position: absolute;
+            bottom: 50px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-size: 24px;
+            z-index: 100;
+            font-family: Arial, sans-serif;
+        }
+
+        #crosshair {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 28px;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        #startScreen {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: black;
+            color: white;
+
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+
+            text-align: center;
+
+            z-index: 9999;
+
+            font-family: Arial, sans-serif;
+        }
+
+        #startScreen h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+
+        #startScreen p {
+            font-size: 22px;
+            line-height: 1.8;
+        }
+
+        #startBtn {
+            margin-top: 30px;
+
+            padding: 15px 40px;
+
+            font-size: 24px;
+
+            border: none;
+
+            cursor: pointer;
+
+            border-radius: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="startScreen">
+
+        <h1>문을 선택하세요</h1>
+
+        <p>
+            주변에는 여러 개의 문이 있습니다.<br><br>
+
+            각 문은 서로 다른 길로 이어집니다.<br><br>
+
+            정답은 없습니다.<br>
+            자신의 판단에 따라 가장 옳다고 생각하는 문을 선택하세요.<br><br>
+
+            이동 : WASD<br>
+            시점 이동 : 마우스<br>
+            문 선택 : E
+        </p>
+
+        <button id="startBtn">
+            시작하기
+        </button>
+
+    </div>
+    <canvas id="glCanvas"></canvas>
+
+    <div id="ui">
+        <div id="levelText">
+            선택 단계 : 1
+        </div>
+    </div>
+
+    <div id="message"></div>
+
+    <div id="crosshair">
+        +
+    </div>
+    <script type="text/javascript" src="shaders/initShaders2.js"></script>
+    <script type="text/javascript" src="MV.js"></script>
+    <script type="module">
+        const levelText =
+            document.getElementById("levelText");
+
+        const message =
+            document.getElementById("message");
+
+        var gl;
+
+        let vertices = [];
+        let CubeVertexCount = 0;
+
+        let worldMatLoc;
+        let viewMatLoc;
+        let projMatLoc;
+
+        let objectColorLoc;
+        let eyePosLoc;
+
+        let fogStartLoc;
+        let fogEndLoc;
+
+        let eye = vec3(0, 2, 10);
+
+        let yaw = 180;
+        let pitch = 0;
+
+        let keys = {};
+
+        let doors = [];
+
+        let selectedDoor = null;
+
+        let stage = 0;
+
+        const stages =
+            [
+                2,
+                3,
+                5,
+                8,
+                12,
+                18,
+                27,
+                40,
+                60,
+                90
+            ];
+
+        let stageStartTime =
+            performance.now();
+
+        let stageTimes = [];
+
+        let fogStart = 20;
+        let fogEnd = 60;
+
+        let gameStarted = false;
+
+        generateModel();
+        init();
+        render();
+
+        function createDoors(count) {
+
+            doors = [];
+
+            const spawnRange = 30;
+            const minDistance = 5;
+
+            for (let i = 0; i < count; i++) {
+
+                let x, z;
+                let valid = false;
+
+                while (!valid) {
+
+                    x =
+                        eye[0] +
+                        (Math.random() * 2 - 1)
+                        * spawnRange;
+
+                    z =
+                        eye[2] +
+                        (Math.random() * 2 - 1)
+                        * spawnRange;
+
+                    valid = true;
+
+                    // 플레이어 너무 가까운 곳 금지
+                    let playerDist =
+                        Math.sqrt(
+                            (x - eye[0]) * (x - eye[0]) +
+                            (z - eye[2]) * (z - eye[2])
+                        );
+
+                    if (playerDist < minDistance)
+                        valid = false;
+
+                    // 문끼리 겹침 방지
+                    for (let door of doors) {
+
+                        let dist =
+                            Math.sqrt(
+                                (x - door.x) * (x - door.x) +
+                                (z - door.z) * (z - door.z)
+                            );
+
+                        if (dist < 4) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+
+                doors.push({
+                    x: x,
+                    z: z,
+
+                    color: [
+                        Math.random(),
+                        Math.random(),
+                        Math.random()
+                    ]
+                });
+            }
+
+            levelText.innerHTML =
+                "선택 단계 : " +
+                (stage + 1);
+        }
+
+        function updatePlayer() {
+            let speed = 0.25;
+
+            let forward =
+                vec3(
+                    Math.sin(radians(yaw)),
+                    0,
+                    -Math.cos(radians(yaw))
+                );
+
+            let right =
+                vec3(
+                    Math.cos(radians(yaw)),
+                    0,
+                    Math.sin(radians(yaw))
+                );
+
+            if (keys["w"] || keys["ㅈ"])
+                eye = add(
+                    eye,
+                    scale(speed, forward)
+                );
+
+            if (keys["s"] || keys["ㄴ"])
+                eye = subtract(
+                    eye,
+                    scale(speed, forward)
+                );
+
+            if (keys["a"] || keys["ㅁ"])
+                eye = subtract(
+                    eye,
+                    scale(speed, right)
+                );
+
+            if (keys["d"] || keys["ㅇ"])
+                eye = add(
+                    eye,
+                    scale(speed, right)
+                );
+        }
+
+        function updateSelection() {
+
+            selectedDoor = null;
+
+            let bestDist = 99999;
+
+            for (let door of doors) {
+
+                let dx =
+                    eye[0] - door.x;
+
+                let dz =
+                    eye[2] - door.z;
+
+                let dist =
+                    Math.sqrt(
+                        dx * dx +
+                        dz * dz
+                    );
+
+                if (
+                    dist < 4 &&
+                    dist < bestDist
+                ) {
+                    bestDist = dist;
+                    selectedDoor = door;
+                }
+            }
+
+            if (selectedDoor) {
+
+                message.innerHTML =
+                    "E 키를 눌러 선택";
+
+            } else {
+
+                message.innerHTML = "";
+            }
+        }
+
+        window.addEventListener(
+            "keydown",
+            function (e) {
+                keys[e.key.toLowerCase()] = true;
+
+                if (
+                    (e.key.toLowerCase() === "e"
+                        || e.key === "ㄷ")
+                    &&
+                    selectedDoor
+                ) {
+                    nextStage();
+                }
+            });
+
+        function nextStage() {
+            let elapsed =
+                (
+                    performance.now()
+                    -
+                    stageStartTime
+                ) / 1000;
+
+            stageTimes.push(elapsed);
+
+            stage++;
+
+            if (
+                stage >=
+                stages.length
+            ) {
+                showEnding();
+                return;
+            }
+
+            fogStart -= 1;
+            fogEnd -= 2;
+
+            stageStartTime =
+                performance.now();
+
+            createDoors(
+                stages[stage]
+            );
+        }
+
+        function showEnding() {
+
+            let total = 0;
+
+            for (let t of stageTimes)
+                total += t;
+
+            let avg =
+                total /
+                stageTimes.length;
+
+            let stageResult = "";
+
+            for (let i = 0; i < stageTimes.length; i++) {
+
+                stageResult +=
+                    `
+            <div>
+                Stage ${i + 1} (${stages[i]}개의 문)
+                :
+                ${stageTimes[i].toFixed(2)}초
+            </div>
+            `;
+            }
+
+            document.body.innerHTML =
+                `
+        <div style="
+            width:100vw;
+            height:100vh;
+            background:black;
+            color:white;
+            display:flex;
+            flex-direction:column;
+            justify-content:center;
+            align-items:center;
+            font-family:Arial;
+            text-align:center;
+            overflow:auto;
+        ">
+
+            <h1>선택의 역설</h1>
+
+            <h2>
+                평균 고민 시간 :
+                ${avg.toFixed(2)}초
+            </h2>
+
+            <br>
+
+            <h3>스테이지별 고민 시간</h3>
+
+            ${stageResult}
+
+            <br>
+
+            <p style="font-size:24px">
+                선택지는 늘어났지만<br>
+                결정은 더 어려워졌습니다.
+            </p>
+
+        </div>
+        `;
+        }
+
+        function generateModel() {
+            const p =
+                [
+                    vec3(-0.5, -0.5, -0.5),
+                    vec3(0.5, -0.5, -0.5),
+                    vec3(0.5, 0.5, -0.5),
+                    vec3(-0.5, 0.5, -0.5),
+
+                    vec3(-0.5, -0.5, 0.5),
+                    vec3(0.5, -0.5, 0.5),
+                    vec3(0.5, 0.5, 0.5),
+                    vec3(-0.5, 0.5, 0.5)
+                ];
+
+            quad(1, 0, 3, 2);
+            quad(2, 3, 7, 6);
+            quad(3, 0, 4, 7);
+            quad(6, 5, 1, 2);
+            quad(4, 5, 6, 7);
+            quad(5, 4, 0, 1);
+
+            function quad(a, b, c, d) {
+                let n = vec3(0, 1, 0);
+
+                push(a, n);
+                push(b, n);
+                push(c, n);
+
+                push(a, n);
+                push(c, n);
+                push(d, n);
+            }
+
+            function push(i, n) {
+                vertices.push(p[i]);
+                vertices.push(n);
+                vertices.push(vec2(0, 0));
+
+                CubeVertexCount++;
+            }
+        }
+
+        function init() {
+            const canvas =
+                document.getElementById("glCanvas");
+
+            canvas.width =
+                window.innerWidth;
+
+            canvas.height =
+                window.innerHeight;
+
+            gl =
+                canvas.getContext("webgl2");
+
+            gl.viewport(
+                0,
+                0,
+                canvas.width,
+                canvas.height
+            );
+
+            gl.enable(gl.DEPTH_TEST);
+
+            const program =
+                initShaders(
+                    gl,
+                    "shaders/choice_vert.glsl",
+                    "shaders/choice_frag.glsl"
+                );
+
+            gl.useProgram(program);
+
+            let buffer =
+                gl.createBuffer();
+
+            gl.bindBuffer(
+                gl.ARRAY_BUFFER,
+                buffer
+            );
+
+            gl.bufferData(
+                gl.ARRAY_BUFFER,
+                flatten(vertices),
+                gl.STATIC_DRAW
+            );
+
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(
+                0, 3, gl.FLOAT, false,
+                32, 0
+            );
+
+            gl.enableVertexAttribArray(1);
+            gl.vertexAttribPointer(
+                1, 3, gl.FLOAT, false,
+                32, 12
+            );
+
+            gl.enableVertexAttribArray(2);
+            gl.vertexAttribPointer(
+                2, 2, gl.FLOAT, false,
+                32, 24
+            );
+
+            worldMatLoc =
+                gl.getUniformLocation(
+                    program,
+                    "worldMat"
+                );
+
+            viewMatLoc =
+                gl.getUniformLocation(
+                    program,
+                    "viewMat"
+                );
+
+            projMatLoc =
+                gl.getUniformLocation(
+                    program,
+                    "projMat"
+                );
+
+            objectColorLoc =
+                gl.getUniformLocation(
+                    program,
+                    "objectColor"
+                );
+
+            eyePosLoc =
+                gl.getUniformLocation(
+                    program,
+                    "eyePos"
+                );
+
+            fogStartLoc =
+                gl.getUniformLocation(
+                    program,
+                    "fogStart"
+                );
+
+            fogEndLoc =
+                gl.getUniformLocation(
+                    program,
+                    "fogEnd"
+                );
+
+            let proj =
+                perspective(
+                    70,
+                    canvas.width / canvas.height,
+                    0.1,
+                    500
+                );
+
+            gl.uniformMatrix4fv(
+                projMatLoc,
+                false,
+                flatten(proj)
+            );
+
+            createDoors(stages[0]);
+
+            canvas.onclick =
+                () =>
+                    canvas.requestPointerLock();
+
+            document.addEventListener(
+                "mousemove",
+                function (e) {
+                    if (
+                        document.pointerLockElement
+                        !== canvas
+                    )
+                        return;
+
+                    yaw += e.movementX * 0.15;
+                    pitch -= e.movementY * 0.15;
+
+                    pitch =
+                        Math.max(
+                            -89,
+                            Math.min(89, pitch)
+                        );
+                }
+            );
+
+            window.addEventListener(
+                "keyup",
+                e =>
+                    keys[e.key.toLowerCase()]
+                    = false
+            );
+
+            document
+                .getElementById("startBtn")
+                .onclick = function () {
+
+                    gameStarted = true;
+
+                    document
+                        .getElementById("startScreen")
+                        .style.display = "none";
+
+                    document
+                        .getElementById("glCanvas")
+                        .requestPointerLock();
+
+                    stageStartTime =
+                        performance.now();
+                };
+        }
+
+        function render() {
+
+            if (!gameStarted) {
+                requestAnimationFrame(render);
+                return;
+            }
+
+            updatePlayer();
+            updateSelection();
+
+            gl.clearColor(
+                0.03,
+                0.03,
+                0.05,
+                1.0
+            );
+
+            gl.clear(
+                gl.COLOR_BUFFER_BIT |
+                gl.DEPTH_BUFFER_BIT
+            );
+
+            let forward =
+                vec3(
+                    Math.sin(radians(yaw)) *
+                    Math.cos(radians(pitch)),
+
+                    Math.sin(radians(pitch)),
+
+                    -Math.cos(radians(yaw)) *
+                    Math.cos(radians(pitch))
+                );
+
+            let view =
+                lookAt(
+                    eye,
+                    add(eye, forward),
+                    vec3(0, 1, 0)
+                );
+
+            gl.uniformMatrix4fv(
+                viewMatLoc,
+                false,
+                flatten(view)
+            );
+
+            gl.uniform3fv(
+                eyePosLoc,
+                flatten(eye)
+            );
+
+            gl.uniform1f(
+                fogStartLoc,
+                fogStart
+            );
+
+            gl.uniform1f(
+                fogEndLoc,
+                fogEnd
+            );
+
+            // 바닥
+            let floorWorld =
+                mult(
+                    translate(
+                        eye[0],
+                        -0.05,
+                        eye[2]
+                    ),
+                    scalem(
+                        200,
+                        0.1,
+                        200
+                    )
+                );
+
+            gl.uniformMatrix4fv(
+                worldMatLoc,
+                false,
+                flatten(floorWorld)
+            );
+
+            gl.uniform3f(
+                objectColorLoc,
+                0.15,
+                0.15,
+                0.18
+            );
+
+            gl.drawArrays(
+                gl.TRIANGLES,
+                0,
+                CubeVertexCount
+            );
+
+            // 문
+            for (let door of doors) {
+
+                let world =
+                    mult(
+                        translate(
+                            door.x,
+                            2,
+                            door.z
+                        ),
+                        scalem(
+                            2,
+                            4,
+                            0.4
+                        )
+                    );
+
+                gl.uniformMatrix4fv(
+                    worldMatLoc,
+                    false,
+                    flatten(world)
+                );
+
+                if (door === selectedDoor) {
+
+                    // 선택된 문
+                    gl.uniform3f(
+                        objectColorLoc,
+                        1.0,
+                        1.0,
+                        1.0
+                    );
+
+                } else {
+
+                    // 일반 문
+                    gl.uniform3f(
+                        objectColorLoc,
+                        door.color[0],
+                        door.color[1],
+                        door.color[2]
+
+                    );
+                }
+
+                gl.drawArrays(
+                    gl.TRIANGLES,
+                    0,
+                    CubeVertexCount
+                );
+            }
+
+            requestAnimationFrame(render);
+        }
+
+    </script>
+</body>
+
+</html>
