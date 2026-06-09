@@ -43,6 +43,15 @@
             pointer-events: none;
         }
 
+        #fadeOverlay {
+            position: absolute;
+            inset: 0;
+            background: black;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 9998;
+        }
+
         #startScreen {
             position: absolute;
             width: 100%;
@@ -124,6 +133,9 @@
     <div id="crosshair">
         +
     </div>
+
+    <div id="fadeOverlay"></div>
+
     <script type="text/javascript" src="shaders/initShaders2.js"></script>
     <script type="text/javascript" src="MV.js"></script>
     <script type="module">
@@ -192,6 +204,12 @@
         let floorVertexCount = 6;
 
         let grassTexture = null;
+
+        let fadeOverlay = null;
+        let transitionState = "idle";
+        let transitionTime = 0;
+        const transitionDuration = 400;
+        let lastRenderTime = performance.now();
 
         generateModel();
 
@@ -363,7 +381,7 @@
                     &&
                     selectedDoor
                 ) {
-                    nextStage();
+                    startStageTransition();
                 }
             });
 
@@ -396,6 +414,47 @@
             createDoors(
                 stages[stage]
             );
+        }
+
+        function startStageTransition() {
+            if (transitionState !== "idle")
+                return;
+
+            transitionState = "fade-out";
+            transitionTime = 0;
+            if (fadeOverlay)
+                fadeOverlay.style.opacity = 0;
+        }
+
+        function updateTransition(delta) {
+            if (transitionState === "idle")
+                return;
+
+            transitionTime += delta;
+            if (transitionState === "fade-out") {
+                let t = Math.min(
+                    transitionTime / transitionDuration,
+                    1
+                );
+                fadeOverlay.style.opacity = t;
+
+                if (t >= 1) {
+                    nextStage();
+                    transitionState = "fade-in";
+                    transitionTime = 0;
+                }
+            }
+            else if (transitionState === "fade-in") {
+                let t = Math.min(
+                    transitionTime / transitionDuration,
+                    1
+                );
+                fadeOverlay.style.opacity = 1 - t;
+
+                if (t >= 1) {
+                    transitionState = "idle";
+                }
+            }
         }
 
         function showEnding() {
@@ -779,6 +838,11 @@
                         performance.now();
                 };
 
+            fadeOverlay =
+                document.getElementById(
+                    "fadeOverlay"
+                );
+
             generateFloor();
         }
 
@@ -962,14 +1026,23 @@
         }
 
         function render() {
+            let now = performance.now();
+            let delta = now - lastRenderTime;
+            lastRenderTime = now;
 
             if (!gameStarted) {
                 requestAnimationFrame(render);
                 return;
             }
 
-            updatePlayer();
-            updateSelection();
+            if (transitionState !== "idle") {
+                updateTransition(delta);
+            }
+
+            if (transitionState === "idle") {
+                updatePlayer();
+                updateSelection();
+            }
 
             gl.clearColor(
                 0.03,
